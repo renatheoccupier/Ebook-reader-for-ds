@@ -33,12 +33,28 @@ const int kPreviewTitleLines = 3;
 const int kPreviewTitleGap = 2;
 const int kPreviewImageGap = 8;
 const int kPromptFont = 12;
+const int kPreviewWarmupFrames = 10;
 const u32 kPreviewCandidatePool = 12u;
 const u32 kPreviewMaxEntryBytes = 768u * 1024u;
+const u32 kPreviewCacheEntries = 3u;
 
 string gLastBrowserPath;
 int gLastBrowserPos = 0;
 int gLastBrowserCursor = 0;
+
+struct PreviewCacheEntry
+{
+	string file;
+	vector<u16> pixels;
+	u16 width, height;
+	u16 maxWidth, maxHeight;
+	bool hasImage;
+	u32 stamp;
+	PreviewCacheEntry() : width(0), height(0), maxWidth(0), maxHeight(0), hasImage(false), stamp(0) {}
+};
+
+vector<PreviewCacheEntry> gPreviewCache(kPreviewCacheEntries);
+u32 gPreviewCacheStamp = 1;
 
 int browserListRight()
 {
@@ -354,6 +370,47 @@ u32 hashString(const string& text)
 	return hash;
 }
 
+bool tryLoadPreviewCache(const string& file_name, u16 maxWidth, u16 maxHeight, vector<u16>& pixels, u16& width, u16& height, bool& hasImage)
+{
+	for(u32 i = 0; i < gPreviewCache.size(); ++i) {
+		PreviewCacheEntry& entry = gPreviewCache[i];
+		if(entry.file != file_name || entry.maxWidth != maxWidth || entry.maxHeight != maxHeight)
+			continue;
+
+		pixels = entry.pixels;
+		width = entry.width;
+		height = entry.height;
+		hasImage = entry.hasImage;
+		entry.stamp = gPreviewCacheStamp++;
+		return true;
+	}
+	return false;
+}
+
+void storePreviewCache(const string& file_name, const vector<u16>& pixels, u16 width, u16 height, u16 maxWidth, u16 maxHeight, bool hasImage)
+{
+	if(gPreviewCache.empty()) return;
+
+	PreviewCacheEntry* slot = &gPreviewCache[0];
+	for(u32 i = 0; i < gPreviewCache.size(); ++i) {
+		PreviewCacheEntry& entry = gPreviewCache[i];
+		if(entry.file.empty()) {
+			slot = &entry;
+			break;
+		}
+		if(entry.stamp < slot->stamp) slot = &entry;
+	}
+
+	slot->file = file_name;
+	slot->pixels = pixels;
+	slot->width = width;
+	slot->height = height;
+	slot->maxWidth = maxWidth;
+	slot->maxHeight = maxHeight;
+	slot->hasImage = hasImage;
+	slot->stamp = gPreviewCacheStamp++;
+}
+
 bool loadPreviewImage(const string& epubFile, u16 maxWidth, u16 maxHeight, vector<u16>& pixels, u16& width, u16& height)
 {
 	pixels.clear();
@@ -494,6 +551,8 @@ void file_browser :: resetPreview()
 	previewFile.clear();
 	previewWidth = previewHeight = 0;
 	previewHasImage = false;
+	previewPending = false;
+	previewDelayFrames = 0;
 	promptActive = false;
 }
 
@@ -513,9 +572,25 @@ void file_browser :: showPreview(const string& file_name)
 	const int frameY2 = height - kPreviewMargin - 4;
 	const int innerWidth = frameX2 - frameX1 - 3;
 	const int innerHeight = frameY2 - frameY1 - 3;
-	if(innerWidth > 24 && innerHeight > 24)
+	if(innerWidth > 24 && innerHeight > 24 &&
+		!tryLoadPreviewCache(file_name, innerWidth, innerHeight, previewPixels, previewWidth, previewHeight, previewHasImage)) {
 		previewHasImage = loadPreviewImage(file_name, innerWidth, innerHeight, previewPixels, previewWidth, previewHeight);
+		storePreviewCache(file_name, previewPixels, previewWidth, previewHeight, innerWidth, innerHeight, previewHasImage);
+	}
+	previewPending = false;
+	previewDelayFrames = 0;
 	promptActive = false;
+}
+
+bool file_browser :: tickPreview()
+{
+	if(!previewPending || previewFile.empty()) return false;
+	if(previewDelayFrames > 0) {
+		--previewDelayFrames;
+		return false;
+	}
+	showPreview(previewFile);
+	return true;
 }
 
 void file_browser :: syncPreviewToCursor(bool force)
@@ -534,7 +609,18 @@ void file_browser :: syncPreviewToCursor(bool force)
 
 	const string file_name = path + current.second;
 	if(!force && previewFile == file_name) return;
-	showPreview(file_name);
+	if(force) {
+		showPreview(file_name);
+		return;
+	}
+
+	previewFile = file_name;
+	vector<u16>().swap(previewPixels);
+	previewWidth = previewHeight = 0;
+	previewHasImage = false;
+	previewPending = true;
+	previewDelayFrames = kPreviewWarmupFrames;
+	promptActive = false;
 }
 
 void file_browser :: activateCursor()
@@ -549,7 +635,7 @@ void file_browser :: activateCursor()
 		cd();
 	}
 	else {
-		syncPreviewToCursor();
+		syncPreviewToCursor(true);
 		promptActive = !previewFile.empty();
 	}
 }
@@ -669,6 +755,7 @@ string file_browser :: run()
 
 	while(pumpPowerManagement()){
 		swiWaitForVBlank();
+		if(!promptActive && tickPreview()) drawPreview();
 		scanKeys();
 		int down = keysDown();
 		if(!down) continue;
