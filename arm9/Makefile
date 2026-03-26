@@ -25,13 +25,13 @@ DATA		:=	../data
 #-----------------------------------------------------------------------
 ARCH	:=	-mthumb -mthumb-interwork -march=armv5te -mtune=arm946e-s 
 
-CFLAGS	:=	-g -Wall -O3 -ffast-math \
+CFLAGS	:=	-g -Wall -O3 -ffast-math -ffunction-sections -fdata-sections \
             $(ARCH) $(INCLUDE) -DARM9
 
 CXXFLAGS	:= $(CFLAGS) -fno-rtti -fno-exceptions 
 
 ASFLAGS	:=	-g $(ARCH)
-LDFLAGS	:=	-specs=$(CALICO)/share/ds9.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map)
+LDFLAGS	:=	-specs=$(CALICO)/share/ds9.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map) -Wl,--gc-sections
 
 #-----------------------------------------------------------------------
 # any extra libraries we wish to link with the project
@@ -58,7 +58,6 @@ export VPATH	:=	$(foreach dir,$(SOURCES),$(CURDIR)/$(dir)) \
 
 CFILES		:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.c)))
 CPPFILES	:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.cpp)))
-CPPFILES	:=	$(filter-out fb2.cpp txt.cpp,$(CPPFILES))
 SFILES		:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.s)))
 BINFILES	:=	$(foreach dir,$(DATA),$(notdir $(wildcard $(dir)/*.)))
 PNGFILES	:=	$(foreach dir,$(DATA),$(notdir $(wildcard $(dir)/*.png)))
