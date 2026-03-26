@@ -3,7 +3,6 @@
 #include "settings.h"
 #include "button.h"
 #include "file_browser.h"
-#include "extlink.h"
 #include <sys/dir.h>
 #include <fstream>
 #include <stdio.h>
@@ -34,9 +33,6 @@ void drawMenuTopScreen()
 
 } // namespace
 
-
-const int giant_buf_size = 1800000;	// ~1.8 MB
-char giant_buffer[giant_buf_size];
 
 bool file_ok(const string& file_name)
 { return std::ifstream(file_name.c_str()).good(); }
@@ -120,7 +116,6 @@ int main(int argc, char *argv[])
 	initPowerManagement();
 	iprintf("loading fonts... ");
 	renderer::initFonts();
-	string moonsh = GetFileBody_From_MoonShell2_ExtLink();
 	consoleClear();
 	string enc = encPath + settings::encname;
 	if(file_ok(enc)) loadEnc(enc.c_str());
@@ -128,8 +123,7 @@ int main(int argc, char *argv[])
 	if(file_ok(trans)) loadTrans(trans);
 	consoleClear();
 	
-	if(book_ok(moonsh)) openBook(moonsh);
-	else if (book_ok(argfile)) openBook(argfile);
+	if(book_ok(argfile)) openBook(argfile);
 	if(appShouldExit()) return 0;
 	if(!book_ok(settings::recent_book)) browseLoop();
 	if(appShouldExit()) return 0;

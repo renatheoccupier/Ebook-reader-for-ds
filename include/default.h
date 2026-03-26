@@ -11,9 +11,6 @@ using std::pair;
 
 #define buttonFontSize (16)
 
-extern const int giant_buf_size;
-extern char giant_buffer[];
-
 void bsod(const char* msg);
 void applyBrightness();
 void cycleBacklight();
@@ -23,7 +20,6 @@ bool appShouldExit();
 string extention(string name);
 string noExt(string name);
 string noPath(string name);
-u32 loadToGiantBuffer(const char* filename, u32 offset = 0);
 enum Layout {d0=0, d90, d180, d270};
 enum Encoding {eUtf8, e1251};
 enum scr_id {top_scr, bottom_scr};
