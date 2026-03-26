@@ -16,6 +16,7 @@ private:
 	void drawPreview();
 	void drawPrompt();
 	void clampCursor();
+	bool tickPreview();
 	void syncPreviewToCursor(bool force = false);
 	void activateCursor();
 	
@@ -25,7 +26,8 @@ private:
 	string path;
 	string previewFile;
 	u16 previewWidth, previewHeight;
-	bool previewHasImage;
+	bool previewHasImage, previewPending;
+	int previewDelayFrames;
 	bool promptActive;
 	button promptOpen, promptKeep;
 	scrollbar sbar;

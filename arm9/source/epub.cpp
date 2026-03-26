@@ -454,6 +454,88 @@ bool decodeJpeg(const char* data, u32 size, u16 max_width, u16 max_height, vecto
 
 } // namespace
 
+epub_book :: ~epub_book()
+{
+	closeArchive();
+}
+
+bool epub_book :: ensureArchiveOpen()
+{
+	if(archive != NULL) return true;
+	archive = unzOpen(bookFile.c_str());
+	return archive != NULL;
+}
+
+void epub_book :: closeArchive()
+{
+	if(archive != NULL) {
+		unzClose(archive);
+		archive = NULL;
+	}
+}
+
+void epub_book :: clearImageCache()
+{
+	for(u32 i = 0; i < imageCache.size(); ++i) {
+		imageCache[i].path.clear();
+		vector<u16>().swap(imageCache[i].pixels);
+		imageCache[i].width = imageCache[i].height = 0;
+		imageCache[i].maxWidth = imageCache[i].maxHeight = 0;
+		imageCache[i].themed = false;
+		imageCache[i].bgCol = Color(0, 0, 0);
+		imageCache[i].fCol = Color(0, 0, 0);
+		imageCache[i].stamp = 0;
+	}
+	imageCacheStamp = 1;
+}
+
+bool epub_book :: tryLoadCachedImage(const string& zip_path, u16 max_width, u16 max_height)
+{
+	const bool themed = settings::nightMode() || settings::lowLightMode();
+	for(u32 i = 0; i < imageCache.size(); ++i) {
+		ImageCacheEntry& entry = imageCache[i];
+		if(entry.path != zip_path || entry.maxWidth != max_width || entry.maxHeight != max_height || entry.themed != themed)
+			continue;
+		if(themed && (entry.bgCol.R != settings::bgCol.R || entry.bgCol.G != settings::bgCol.G || entry.bgCol.B != settings::bgCol.B ||
+			entry.fCol.R != settings::fCol.R || entry.fCol.G != settings::fCol.G || entry.fCol.B != settings::fCol.B))
+			continue;
+
+		parag.image_ref = zip_path;
+		parag.image_pixels = entry.pixels;
+		parag.image_width = entry.width;
+		parag.image_height = entry.height;
+		entry.stamp = imageCacheStamp++;
+		return true;
+	}
+	return false;
+}
+
+void epub_book :: storeCachedImage(const string& zip_path, const vector<u16>& pixels, u16 width, u16 height, u16 max_width, u16 max_height)
+{
+	if(imageCache.empty()) return;
+
+	ImageCacheEntry* slot = &imageCache[0];
+	for(u32 i = 0; i < imageCache.size(); ++i) {
+		ImageCacheEntry& entry = imageCache[i];
+		if(entry.path.empty()) {
+			slot = &entry;
+			break;
+		}
+		if(entry.stamp < slot->stamp) slot = &entry;
+	}
+
+	slot->path = zip_path;
+	slot->pixels = pixels;
+	slot->width = width;
+	slot->height = height;
+	slot->maxWidth = max_width;
+	slot->maxHeight = max_height;
+	slot->themed = settings::nightMode() || settings::lowLightMode();
+	slot->bgCol = settings::bgCol;
+	slot->fCol = settings::fCol;
+	slot->stamp = imageCacheStamp++;
+}
+
 void epub_book :: parse()
 {
 	encoding = eUtf8;
@@ -463,18 +545,19 @@ void epub_book :: parse()
 	chapter_targets.clear();
 	anchor_targets.clear();
 	zip_index.clear();
+	clearImageCache();
+	closeArchive();
 	document.reset();
 	pugi::xml_node book = document.append_child("book");
 	const char err[] = "epub_book::parse:Can't load epub.";
 
 	char *buf = NULL;
 	u32 size = 0;
-	unzFile hArchiveFile = unzOpen(bookFile.c_str());
-	if (hArchiveFile == NULL) bsod("epub_book::parse:Can't open epub.");
-	buildZipIndex(hArchiveFile, zip_index);
+	if(!ensureArchiveOpen()) bsod("epub_book::parse:Can't open epub.");
+	buildZipIndex(archive, zip_index);
 
 	pugi::xml_document doc;
-	if(!loadFromZip(hArchiveFile, "META-INF/container.xml", buf, size, true, &zip_index)) bsod(err);
+	if(!loadFromZip(archive, "META-INF/container.xml", buf, size, true, &zip_index)) bsod(err);
 	pugi::xml_parse_result result = doc.load_buffer_inplace(buf, size);
 	if(result.status != pugi::status_ok) bsod(err);
 	string cont_path = doc.child("container").child("rootfiles").child("rootfile").attribute("full-path").value();
@@ -483,7 +566,7 @@ void epub_book :: parse()
 
 	const string opf_dir = dirName(cont_path);
 	doc.reset();
-	if(!loadFromZip(hArchiveFile, cont_path, buf, size, true, &zip_index)) bsod(err);
+	if(!loadFromZip(archive, cont_path, buf, size, true, &zip_index)) bsod(err);
 	result = doc.load_buffer_inplace(buf, size);
 	if(result.status != pugi::status_ok) bsod(err);
 
@@ -525,7 +608,7 @@ void epub_book :: parse()
 			consoleClear();
 			iprintf("unpacking %lu/%d\n", i + 1, chapter_files.size());
 		}
-		if(!loadFromZip(hArchiveFile, chapter_files[i], buf, size, true, &zip_index)) bsod(err);
+		if(!loadFromZip(archive, chapter_files[i], buf, size, true, &zip_index)) bsod(err);
 
 		pugi::xml_document chapter_doc;
 		result = chapter_doc.load_buffer_inplace(buf, size);
@@ -545,20 +628,14 @@ void epub_book :: parse()
 		delete[] buf;
 		buf = NULL;
 	}
-	unzClose(hArchiveFile);
-	hArchiveFile = NULL;
 
 	consoleClear();
 	iprintf("parsing...\n");
 	push_it = true;
 	parse_doc(document);
 	vector<toc_link> toc_links;
-	unzFile tocZip = unzOpen(bookFile.c_str());
-	if(tocZip) {
-		if(!nav_file.empty()) loadHtmlTocLinks(tocZip, nav_file, toc_links, &zip_index);
-		if(toc_links.empty() && !ncx_file.empty()) loadNcxTocLinks(tocZip, ncx_file, toc_links, &zip_index);
-		unzClose(tocZip);
-	}
+	if(!nav_file.empty()) loadHtmlTocLinks(archive, nav_file, toc_links, &zip_index);
+	if(toc_links.empty() && !ncx_file.empty()) loadNcxTocLinks(archive, ncx_file, toc_links, &zip_index);
 	for(u32 i = 0; i < toc_links.size(); ++i) {
 		u32 target = 0;
 		bool found = false;
@@ -597,19 +674,23 @@ bool epub_book :: load_image(const string& zip_path)
 
 	if(zip_path.empty()) return false;
 
+	const u16 max_width = imagePanelWidth();
+	const u16 max_height = imagePanelHeight();
+	if(tryLoadCachedImage(zip_path, max_width, max_height)) return true;
+
 	char* buf = NULL;
 	u32 size = 0;
-	unzFile hArchiveFile = unzOpen(bookFile.c_str());
-	if(hArchiveFile == NULL) return false;
-	const bool loaded = loadFromZip(hArchiveFile, zip_path, buf, size, false, &zip_index);
-	unzClose(hArchiveFile);
+	if(!ensureArchiveOpen()) return false;
+	const bool loaded = loadFromZip(archive, zip_path, buf, size, false, &zip_index);
 	if(!loaded || NULL == buf) return false;
 
 	bool ok = false;
 	if(size > 2u && (u8)buf[0] == 0xFF && (u8)buf[1] == 0xD8)
-		ok = decodeJpeg(buf, size, imagePanelWidth(), imagePanelHeight(), parag.image_pixels, parag.image_width, parag.image_height);
+		ok = decodeJpeg(buf, size, max_width, max_height, parag.image_pixels, parag.image_width, parag.image_height);
 
 	delete[] buf;
+	if(ok)
+		storeCachedImage(zip_path, parag.image_pixels, parag.image_width, parag.image_height, max_width, max_height);
 	return ok;
 }
 
